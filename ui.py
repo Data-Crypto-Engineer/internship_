@@ -42,13 +42,21 @@ def apply_custom_styles() -> None:
         }
 
         /* Ensure top Streamlit header does not overlap or cut off navigation ribbon and buttons */
-        header[data-testid="stHeader"] {
-            background-color: rgba(250, 251, 252, 0.95) !important;
-            z-index: 50 !important;
+        header[data-testid="stHeader"],
+        [data-testid="stHeader"] {
+            background-color: transparent !important;
+            z-index: 1 !important;
         }
 
-        .block-container, [data-testid="stAppViewBlockContainer"] {
-            padding-top: 5.75rem !important;
+        /* Comprehensive top padding across all modern Streamlit container versions */
+        .block-container,
+        [data-testid="stAppViewBlockContainer"],
+        [data-testid="stMainBlockContainer"],
+        [data-testid="block-container"],
+        .main .block-container,
+        section[data-testid="stMain"] .block-container,
+        div[data-testid="stAppViewContainer"] section.main .block-container {
+            padding-top: 7.5rem !important;
             padding-bottom: 3rem !important;
             max-width: 1080px !important;
         }
@@ -196,13 +204,22 @@ def apply_custom_styles() -> None:
         }
 
         /* Button override refinement */
-        .stButton>button {
+        .stButton>button,
+        div[data-testid="stHorizontalBlock"] button {
             border-radius: 6px !important;
             font-weight: 600 !important;
-            font-size: 0.875rem !important;
+            font-size: 0.825rem !important;
             white-space: nowrap !important;
-            padding: 0.35rem 0.55rem !important;
+            padding: 0.35rem 0.5rem !important;
             transition: all 0.15s ease !important;
+        }
+
+        /* Prevent Streamlit text clipping inside navigation buttons */
+        div[data-testid="stHorizontalBlock"] button p {
+            font-size: 0.825rem !important;
+            white-space: nowrap !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
         }
 
         /* Streamlit info & warning banners */
@@ -218,9 +235,10 @@ def apply_custom_styles() -> None:
 
 def render_navbar() -> None:
     """Render the top navigation bar with clean buttons for seamless routing."""
-    st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
+    # Physical spacing block to ensure navigation buttons sit comfortably below Streamlit Cloud toolbar
+    st.markdown("<div style='height: 2.25rem; width: 100%; margin-bottom: 0.5rem;'></div>", unsafe_allow_html=True)
     col_brand, col_nav1, col_nav2, col_nav3, col_nav4, col_nav5, col_cta = st.columns(
-        [2.3, 0.9, 1.2, 1.3, 1.65, 0.85, 1.2]
+        [2.2, 0.85, 1.15, 1.3, 1.7, 0.85, 1.15]
     )
 
     with col_brand:
