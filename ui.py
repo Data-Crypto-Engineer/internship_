@@ -4,6 +4,8 @@ Strict one-way dependency: ui.py imports services.py and utils.py only.
 Never imports app.py.
 """
 
+import json
+import datetime
 import streamlit as st
 from typing import Dict, Any, Optional
 from services import (
@@ -20,6 +22,9 @@ from services import (
     get_our_approach,
     get_ai_response,
     submit_application,
+    get_all_applications,
+    export_applications_csv,
+    verify_admin_passcode,
 )
 from utils import (
     sanitize_text,
@@ -792,6 +797,7 @@ def render_apply_page() -> None:
             help="Optional. Tell us about your goals or what you hope to learn.",
         )
         availability = st.text_input("Estimated Weekly Availability (optional)", placeholder="e.g. 10–15 hours/week, remote")
+
         resume_file = st.file_uploader("Upload Resume / CV (PDF or Markdown)", type=["pdf", "txt", "md"])
 
         st.markdown("#### 4. Consent")
@@ -841,13 +847,12 @@ def render_apply_page() -> None:
             st.error(result.get("message"))
 
     # Configurable Backend Guidance Box (Section 10 & 11)
-    with st.expander("ℹ️ Developer Backend Configuration Note"):
+    with st.expander("ℹ️ Developer Backend Configuration & Data Storage Note"):
         st.markdown(
             """
-            **Integration Architecture:**
-            Applications are currently processed through `services.submit_application()`.
-            To hook up an external database or webhook (e.g. CRM, Slack, Google Sheets, or REST API),
-            configure the environment variable:
+            **Integration & Data Storage Architecture:**
+            - **Local Persistent Storage:** All submitted candidate applications are automatically stored in `applications.json` in the project root. You can review, search, and export them directly in the **Candidate Submissions & Admissions Review** section below or via the footer Admissions Portal.
+            - **External Webhooks / Database:** To additionally forward candidate submissions to an external CRM, Slack, Google Sheets (via Zapier/Make), or your custom REST API, configure:
             ```bash
             export SUBMISSION_WEBHOOK_URL="https://api.yourorganization.com/admissions"
             ```
@@ -855,13 +860,172 @@ def render_apply_page() -> None:
             ```toml
             SUBMISSION_WEBHOOK_URL = "https://api.yourorganization.com/admissions"
             ```
-            The submission service will automatically forward structured JSON payloads without requiring UI changes.
+            The submission service will automatically send structured JSON payloads to this endpoint on each submission without blocking applicants.
+            - **Admin Security:** Protect candidate data using `ADMIN_KEY = "your_secret"` in `.streamlit/secrets.toml` or environment variable (defaults to `admin123`).
             """
         )
 
+    # In-page Admissions Review expander for immediate access
+    with st.expander("📁 View Stored Candidate Applications (Admissions Portal)", expanded=False):
+        _render_admissions_table_and_details()
+
+
+def _render_admissions_table_and_details() -> None:
+    """Render the admissions candidate list, search filter, and 1-click export."""
+    if not st.session_state.get("admin_authenticated", False):
+        st.markdown("##### 🔒 Admin Authentication Required")
+        st.caption(
+            "Access candidate applications and exported data. "
+            "Passcode defaults to `admin123` (customizable via `ADMIN_KEY` in `.streamlit/secrets.toml` or environment variable)."
+        )
+        col_pwd, col_btn = st.columns([3, 1])
+        with col_pwd:
+            passcode = st.text_input("Admin Passcode", type="password", key="admin_pass_input", placeholder="Enter passcode...")
+        with col_btn:
+            st.markdown("<div style='height: 1.75rem;'></div>", unsafe_allow_html=True)
+            if st.button("Unlock Portal", key="btn_unlock_admin"):
+                if verify_admin_passcode(passcode):
+                    st.session_state.admin_authenticated = True
+                    st.success("Authenticated successfully!")
+                    st.rerun()
+                else:
+                    st.error("Incorrect passcode. Default is 'admin123'.")
+        return
+
+    # Authenticated Admin View
+    col_hdr, col_logout = st.columns([4, 1])
+    with col_hdr:
+        st.markdown("#### 📋 Stored Candidate Applications")
+        st.caption("Persistent storage source: `applications.json`. All candidate submissions are recorded here in real-time.")
+    with col_logout:
+        if st.button("Lock / Log Out", key="btn_admin_logout"):
+            st.session_state.admin_authenticated = False
+            st.rerun()
+
+    all_apps = get_all_applications()
+    total_count = len(all_apps)
+
+    # Metric summary
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("Total Applicants", total_count)
+    with m2:
+        latest_time = all_apps[0].get("submitted_at", "None")[:10] if all_apps else "None"
+        st.metric("Latest Submission", latest_time)
+    with m3:
+        unique_areas = len(set(a.get("internship_area", "") for a in all_apps if a.get("internship_area")))
+        st.metric("Active Tracks", unique_areas)
+
+    if total_count == 0:
+        st.info("No applications received yet. Submit the form above to see your first candidate record appear here.")
+        return
+
+    # 1-Click Export Actions
+    csv_data = export_applications_csv()
+    json_data = json.dumps(all_apps, indent=2, ensure_ascii=False)
+    timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    exp_c1, exp_c2 = st.columns(2)
+    with exp_c1:
+        st.download_button(
+            label="⬇️ Download All Applications (CSV / Excel)",
+            data=csv_data,
+            file_name=f"candidates_export_{timestamp_str}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    with exp_c2:
+        st.download_button(
+            label="⬇️ Download Raw Applications (JSON)",
+            data=json_data,
+            file_name=f"candidates_export_{timestamp_str}.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+    # Search and Filtering Controls
+    st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
+    f_col1, f_col2 = st.columns([2, 1])
+    with f_col1:
+        search_query = st.text_input("🔍 Search Applicants (Name, Email, University, Skills)", key="admin_search").strip().lower()
+    with f_col2:
+        all_tracks = ["All Tracks"] + sorted(list(set(a.get("internship_area", "") for a in all_apps if a.get("internship_area"))))
+        selected_track = st.selectbox("Filter by Track", all_tracks, key="admin_track_filter")
+
+    filtered = all_apps
+    if selected_track != "All Tracks":
+        filtered = [a for a in filtered if a.get("internship_area") == selected_track]
+    if search_query:
+        filtered = [
+            a for a in filtered
+            if search_query in a.get("full_name", "").lower()
+            or search_query in a.get("email", "").lower()
+            or search_query in a.get("university", "").lower()
+            or search_query in a.get("relevant_skills", "").lower()
+            or search_query in a.get("id", "").lower()
+        ]
+
+    st.markdown(f"**Showing {len(filtered)} of {total_count} candidate applications**")
+
+    # Detailed candidate records
+    for idx, cand in enumerate(filtered):
+        c_name = cand.get("full_name", "Unknown")
+        c_track = cand.get("internship_area", "Unspecified")
+        c_time = cand.get("submitted_at", "")[:19].replace("T", " ") + " UTC"
+        c_id = cand.get("id", "APP-UNKNOWN")
+
+        with st.expander(f"👤 {c_name} — {c_track} ({c_id})", expanded=(idx == 0 and len(filtered) <= 2)):
+            d1, d2 = st.columns(2)
+            with d1:
+                st.markdown(f"**Full Name:** {c_name}")
+                st.markdown(f"**Email:** [{cand.get('email', '')}](mailto:{cand.get('email', '')})")
+                st.markdown(f"**University:** {cand.get('university', 'Not specified')}")
+                st.markdown(f"**Field of Study:** {cand.get('field_of_study') or 'Not specified'}")
+                st.markdown(f"**Graduation / Year:** {cand.get('graduation_year') or 'Not specified'}")
+            with d2:
+                st.markdown(f"**Track Applied:** `{c_track}`")
+                st.markdown(f"**Submitted At:** {c_time}")
+                st.markdown(f"**Receipt ID:** `{c_id}`")
+                st.markdown(f"**Weekly Availability:** {cand.get('availability') or 'Not provided (optional)'}")
+                st.markdown(f"**Resume File:** `{cand.get('resume_filename', 'None provided')}`")
+
+            # Profiles
+            gh = cand.get("github_url", "")
+            li = cand.get("linkedin_url", "")
+            if gh or li:
+                profile_links = []
+                if gh:
+                    profile_links.append(f"[GitHub Profile]({gh})")
+                if li:
+                    profile_links.append(f"[LinkedIn Profile]({li})")
+                st.markdown(f"**Profiles:** {' • '.join(profile_links)}")
+
+            if cand.get("relevant_skills"):
+                st.markdown(f"**Skills:** `{cand.get('relevant_skills')}`")
+
+            if cand.get("previous_projects"):
+                st.markdown(f"**Previous Projects / Coursework:**\n{cand.get('previous_projects')}")
+
+            if cand.get("why_interested"):
+                st.markdown(f"**Motivation Statement:**\n> {cand.get('why_interested')}")
+            else:
+                st.markdown("**Motivation Statement:** *Left blank (optional)*")
+
+
+def render_admin_portal() -> None:
+    """Full-page Admissions Portal for reviewing and managing candidate submissions."""
+    st.markdown("<div class='hero-title' style='font-size:2.25rem;'>Admissions Review Portal</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='hero-support' style='font-size:1rem; margin-bottom:1.5rem;'>"
+        "Secure internal view of student applications, portfolio links, and 1-click CSV export."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    _render_admissions_table_and_details()
+
 
 def render_footer() -> None:
-    """Render minimal footer adhering to Section 23 specification."""
+    """Render minimal footer adhering to Section 23 specification with admissions link."""
     meta = get_organization_meta()
     st.markdown(
         f"""
@@ -882,3 +1046,9 @@ def render_footer() -> None:
         """,
         unsafe_allow_html=True,
     )
+    col_f_space, col_f_admin = st.columns([4, 1.5])
+    with col_f_admin:
+        if st.button("🔒 Admissions Portal", key="btn_footer_admissions", help="Review candidate applications"):
+            st.session_state.current_page = "Admissions"
+            st.session_state.selected_internship_id = None
+            st.rerun()
