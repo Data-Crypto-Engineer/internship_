@@ -15,6 +15,7 @@ from ui import (
     render_projects_and_skills_page,
     render_about_page,
     render_apply_page,
+    render_admin_portal,
     render_footer,
 )
 
@@ -57,6 +58,8 @@ elif page == "About":
     render_about_page()
 elif page == "Apply":
     render_apply_page()
+elif page == "Admissions":
+    render_admin_portal()
 else:
     render_home_page()
 
