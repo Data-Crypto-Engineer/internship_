@@ -785,14 +785,13 @@ def render_apply_page() -> None:
         relevant_skills = st.text_input("Relevant Skills", placeholder="e.g. Python, Git, React, SQLite")
         previous_projects = st.text_area("Previous Projects or Coursework (optional)", placeholder="Briefly describe 1 or 2 projects or assignments you have completed.")
 
-        st.markdown("#### 3. Motivation & Availability")
+        st.markdown("#### 3. Motivation & Availability (Optional)")
         why_interested = st.text_area(
-            "Why are you interested in this internship? *",
+            "Why are you interested in this internship? (optional)",
             placeholder="Explain what you hope to build and learn through structured engineering practice.",
-            help="Minimum 20 characters.",
+            help="Optional. Tell us about your goals or what you hope to learn.",
         )
-        availability = st.text_input("Estimated Weekly Availability", placeholder="e.g. 10–15 hours/week, remote")
-
+        availability = st.text_input("Estimated Weekly Availability (optional)", placeholder="e.g. 10–15 hours/week, remote")
         resume_file = st.file_uploader("Upload Resume / CV (PDF or Markdown)", type=["pdf", "txt", "md"])
 
         st.markdown("#### 4. Consent")
