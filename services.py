@@ -287,11 +287,6 @@ def submit_application(application_data: Dict[str, Any]) -> Dict[str, Any]:
         return {"success": False, "message": "Please select an Internship Area."}
     if not university:
         return {"success": False, "message": "Please specify your University or Educational Institution."}
-    if not interest_statement or len(interest_statement) < 20:
-        return {
-            "success": False,
-            "message": "Please share a brief statement (at least 20 characters) explaining why you are interested.",
-        }
     if not consent:
         return {
             "success": False,
