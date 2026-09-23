@@ -7,6 +7,11 @@ Never imports ui.py or app.py.
 import os
 import uuid
 import datetime
+import json
+import csv
+import io
+import urllib.request
+import urllib.error
 from typing import List, Dict, Any, Optional
 from data import (
     INTERNSHIPS,
@@ -21,8 +26,33 @@ from data import (
 )
 from utils import sanitize_text, validate_email
 
-# In-memory storage cache for local runtime persistence
+# In-memory and local persistent storage file for candidate applications
+APPLICATIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "applications.json")
 _APPLICATIONS_CACHE: List[Dict[str, Any]] = []
+
+
+def _load_persisted_applications() -> List[Dict[str, Any]]:
+    """Safely load persisted application records from local JSON storage."""
+    if os.path.exists(APPLICATIONS_FILE):
+        try:
+            with open(APPLICATIONS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            return []
+    return []
+
+
+def _persist_application_record(record: Dict[str, Any]) -> None:
+    """Safely persist a new application record to disk."""
+    try:
+        records = _load_persisted_applications()
+        records.append(record)
+        with open(APPLICATIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(records, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
 
 
 # ==============================================================================
@@ -316,15 +346,35 @@ def submit_application(application_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     _APPLICATIONS_CACHE.append(record)
+    _persist_application_record(record)
 
     # Configurable webhook dispatch hook (if developer configures SUBMISSION_WEBHOOK_URL)
-    webhook_url = os.environ.get("SUBMISSION_WEBHOOK_URL")
+    webhook_url = None
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets") and "SUBMISSION_WEBHOOK_URL" in st.secrets:
+            webhook_url = st.secrets["SUBMISSION_WEBHOOK_URL"]
+    except Exception:
+        pass
+    if not webhook_url:
+        webhook_url = os.environ.get("SUBMISSION_WEBHOOK_URL")
+
     if webhook_url:
         try:
-            # Future integration hook:
-            # requests.post(webhook_url, json=record, timeout=5)
-            pass
+            payload_bytes = json.dumps(record).encode("utf-8")
+            req = urllib.request.Request(
+                webhook_url,
+                data=payload_bytes,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "DevPath-Admissions/1.0",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                pass
         except Exception:
+            # Continue gracefully so user submission is never halted if webhook is unreachable
             pass
 
     return {
@@ -338,6 +388,75 @@ def submit_application(application_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def get_all_applications() -> List[Dict[str, Any]]:
+    """
+    Retrieve all stored applications from local disk and runtime memory.
+    Returns list of candidate dictionaries ordered newest first.
+    """
+    persisted = _load_persisted_applications()
+    combined = []
+    seen_ids = set()
+
+    for item in list(reversed(_APPLICATIONS_CACHE)) + list(reversed(persisted)):
+        rec_id = item.get("id")
+        if rec_id and rec_id not in seen_ids:
+            seen_ids.add(rec_id)
+            combined.append(item)
+
+    return combined
+
+
+def export_applications_csv() -> str:
+    """Generate a clean CSV string of all stored applications for 1-click download."""
+    records = get_all_applications()
+    output = io.StringIO()
+    fieldnames = [
+        "id",
+        "submitted_at",
+        "full_name",
+        "email",
+        "university",
+        "field_of_study",
+        "graduation_year",
+        "internship_area",
+        "relevant_skills",
+        "previous_projects",
+        "why_interested",
+        "availability",
+        "github_url",
+        "linkedin_url",
+        "resume_filename",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for row in records:
+        writer.writerow(row)
+    return output.getvalue()
+
+
+def verify_admin_passcode(passcode: str) -> bool:
+    """
+    Verify admin passcode against secrets or environment variable.
+    Defaults to 'admin123' for immediate accessibility without requiring prior setup.
+    """
+    target_key = "admin123"
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets"):
+            if "ADMIN_KEY" in st.secrets:
+                target_key = str(st.secrets["ADMIN_KEY"])
+            elif "admin_key" in st.secrets:
+                target_key = str(st.secrets["admin_key"])
+    except Exception:
+        pass
+
+    env_key = os.environ.get("ADMIN_KEY") or os.environ.get("ADMIN_PASSCODE")
+    if env_key:
+        target_key = env_key
+
+    return passcode.strip() == target_key.strip()
+
+
 def get_cached_applications_count() -> int:
     """Helper for testing or administrative monitoring."""
-    return len(_APPLICATIONS_CACHE)
+    return len(get_all_applications())
